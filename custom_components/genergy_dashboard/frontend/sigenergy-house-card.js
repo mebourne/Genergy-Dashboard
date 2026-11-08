@@ -2150,6 +2150,12 @@ class SigenergyHouseCard extends LitElement {
         padding: 12px 0 0 0;
         box-sizing: border-box;
         overflow: hidden;
+        /* Contain the card's z-indexes (labels 20, flow svg 10) in their own
+         * stacking context so they can't paint over the HA header or popup
+         * dialogs when the page scrolls. The cable-editor modal re-escapes
+         * via :host([data-modal]) below. */
+        position: relative;
+        z-index: 0;
       }
 
       ha-card {
