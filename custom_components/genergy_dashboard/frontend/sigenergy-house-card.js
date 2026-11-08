@@ -1,5 +1,5 @@
 /**
- * Sigenergy House Card v3.17.0 — Lit Element Custom Card for Home Assistant
+ * Sigenergy House Card v3.17.1 — Lit Element Custom Card for Home Assistant
  * Replaces YAML button-card approach with proper SVG-based energy flow visualization.
  *
  * Architecture:
@@ -43,6 +43,60 @@ if (window.SigenergyConfig) {
 // ─── Default Configuration ───────────────────────────────────────────────────
 const DEFAULT_CONFIG = {
   image_path: _HOUSE_CARD_DIR + "images",
+  // Active house style: key into house_styles. Empty = built-in scene.
+  house_style: "",
+  // Named house styles; each may override image_path, images (scene filenames
+  // or URLs), viewbox, paths, click_zones, label_positions and soc_ring_*.
+  // Built-in styles below are fallbacks; config entries override them per
+  // style name.
+  house_styles: {
+    // Fork-only personal style: Australian single-storey house renders
+    // (frontend/images/aus-house). 1170x700 native; cables calibrated to
+    // image pixels by the path editor.
+    "aus-house": {
+      images: {
+        no_car: "aus-house/aus_house_base.png",
+        no_car_night: "aus-house/aus_house_base_night.png",
+        sigenstor: "aus-house/aus_house_battery.png",
+        sigenstor_night: "aus-house/aus_house_battery_night.png",
+        ammeter: "aus-house/aus_house_meter.png",
+        ammeter_night: "aus-house/aus_house_meter_night.png",
+      },
+      viewbox: [1170, 700],
+      paths: {
+        battery: "M 944 408 L 841 428",
+        ev: "M 0 0",
+        ev2: "M 0 0",
+        grid: "M 991 394 L 1079 375 L 1075 498",
+        heat_pump: "M 0 0",
+        home: "M 945 386 L 858 401 L 858 363 L 690 390 L 612 380",
+        solar: "M 770 145 L 879 143 L 879 370 L 946 359",
+        solar_anim: "M 770 145 L 879 143 L 879 370 L 946 359",
+      },
+      click_zones: {
+        solar: { x: 0, y: 0, w: 0, h: 0, color: '#F0D850', label: 'SOLAR' },
+        home: { x: 0, y: 0, w: 0, h: 0, color: '#3498db', label: 'HOME' },
+        battery: { x: 0, y: 0, w: 0, h: 0, color: '#2ecc71', label: 'BATTERY' },
+        grid: { x: 0, y: 0, w: 0, h: 0, color: '#e74c3c', label: 'GRID' },
+        ev: { x: 0, y: 0, w: 0, h: 0, color: '#ff69b4', label: 'EV' },
+        heatpump: { x: 0, y: 0, w: 0, h: 0, color: '#e67e22', label: 'HEAT PUMP' },
+      },
+      label_positions: {
+        battery: { top: "70%", left: "60%" },
+        grid: { top: "27%", left: "75%" },
+        home: { top: "65%", left: "10%" },
+        solar: { top: "5%", left: "35%" },
+      },
+      // Radius 20, top-right arc point kept fixed as the radius shrank
+      // (centre moved +3.54x, -3.54y from 802,438 @ r25).
+      soc_ring_cx: 805.5,
+      soc_ring_cy: 434.5,
+      soc_ring_r: 20,
+    },
+  },
+  // What selects the night image variant: "sun" (sun.sun below_horizon) or
+  // "theme" (follow the Home Assistant theme's dark mode).
+  dark_mode: "sun",
   soc_ring_cx: 498,
   soc_ring_cy: 585,
   soc_ring_r: 32,
@@ -110,6 +164,16 @@ const DEFAULT_CONFIG = {
 // ─── SVG ViewBox matches home_has_solar_has_car.png native dimensions ────────
 const VB_W = 1170;
 const VB_H = 1013;
+
+// ─── Built-in base scene filenames (relative to image_path) ──────────────────
+const BASE_SCENE_FILES = {
+  has_car:   "home_has_solar_has_car.png",
+  no_car:    "home_has_solar_no_car.png",
+  has_2car:  "home_has_solar_has_2car.png",
+  has_2carL: "home_has_solar_has_2carL.png",
+  has_2carR: "home_has_solar_has_2carR.png",
+  no_2car:   "home_has_solar_no_2car.png",
+};
 
 // ─── Flow cable path definitions ─────────────────────────────────────────────
 // Coordinates in viewBox 1170x1013, calibrated from composite overlay at native res.
@@ -197,30 +261,64 @@ class SigenergyHouseCard extends LitElement {
 
   setConfig(config) {
     if (!config) throw new Error("Invalid configuration");
+    // Active house style bundle: a named partial config whose image set and
+    // geometry apply wherever the top-level config does not override. Built-in
+    // named styles are fallbacks; a config entry with the same name replaces
+    // it wholesale.
+    const styles = { ...DEFAULT_CONFIG.house_styles,
+                     ...(config.house_styles && typeof config.house_styles === "object" ? config.house_styles : {}) };
+    const styleCfg = config.house_style && styles[config.house_style] ? styles[config.house_style] : {};
     this._config = {
       ...DEFAULT_CONFIG,
       ...config,
       features: { ...DEFAULT_CONFIG.features, ...(config.features || {}) },
       entities: { ...DEFAULT_CONFIG.entities, ...(config.entities || {}) },
-      colors: { ...DEFAULT_CONFIG.colors, ...(config.colors || {}) },
-      click_zones: { ...DEFAULT_CONFIG.click_zones, ...(config.click_zones || {}) },
-      label_positions: { ...DEFAULT_CONFIG.label_positions, ...(config.label_positions || {}) },
+      colors: { ...DEFAULT_CONFIG.colors, ...(styleCfg.colors || {}), ...(config.colors || {}) },
+      click_zones: { ...DEFAULT_CONFIG.click_zones, ...(styleCfg.click_zones || {}), ...(config.click_zones || {}) },
+      label_positions: { ...DEFAULT_CONFIG.label_positions, ...(styleCfg.label_positions || {}), ...(config.label_positions || {}) },
+      house_styles: config.house_styles && typeof config.house_styles === "object" ? config.house_styles : {},
     };
     // Initialize editable paths from config overrides or defaults
     this._initEditPaths();
     // Initialize editable ring from config
     this._editRing = {
-      cx: this._config.soc_ring_cx || 498,
-      cy: this._config.soc_ring_cy || 585,
-      r: this._config.soc_ring_r || 32,
-      skewX: this._config.soc_ring_skew_x || 0,
-      skewY: this._config.soc_ring_skew_y || 0,
+      cx: this._styleGet("soc_ring_cx") || 498,
+      cy: this._styleGet("soc_ring_cy") || 585,
+      r: this._styleGet("soc_ring_r") || 32,
+      skewX: this._styleGet("soc_ring_skew_x") || 0,
+      skewY: this._styleGet("soc_ring_skew_y") || 0,
     };
   }
+
+  // ── House style resolution ────────────────────────────────────────────────
+  // A house style bundles an image set plus the geometry calibrated to it
+  // (cable paths, click zones, label positions, SoC ring, viewBox). Per key,
+  // a top-level config value that differs from the built-in default wins (the
+  // editors write there); otherwise the active style applies; otherwise the
+  // built-in default.
+  get _style() {
+    // Built-in named styles are fallbacks; a config entry with the same name
+    // replaces it wholesale.
+    const styles = { ...DEFAULT_CONFIG.house_styles, ...(this._config.house_styles || {}) };
+    return (this._config.house_style && styles[this._config.house_style]) || {};
+  }
+
+  _styleGet(key) {
+    const v = this._config[key];
+    if (v !== undefined && v !== DEFAULT_CONFIG[key]) return v;
+    const s = this._style[key];
+    return s !== undefined ? s : v;
+  }
+
+  // Active style's SVG viewBox; a style's images may have different native
+  // dimensions than the built-in 1170x1013 scene.
+  get _vbW() { const w = Number(this._style.viewbox && this._style.viewbox[0]); return w > 0 ? w : VB_W; }
+  get _vbH() { const h = Number(this._style.viewbox && this._style.viewbox[1]); return h > 0 ? h : VB_H; }
 
   _initEditPaths() {
     // Parse path strings into arrays of {x,y} points for the editor
     const configPaths = this._config.paths || {};
+    const stylePaths = this._style.paths || {};
     this._editPaths = {};
     if (!this._hiddenEditorPaths) this._hiddenEditorPaths = new Set();
     const SKIP = new Set(['solar_anim']); // derived paths
@@ -228,7 +326,7 @@ class SigenergyHouseCard extends LitElement {
       if (SKIP.has(name)) continue;
       // EV 2 path only exists in two-garage mode — keep it out of the editor otherwise.
       if (name === 'ev2' && !this._twoEvGarage) continue;
-      const d = configPaths[name] || defaultD;
+      const d = configPaths[name] || stylePaths[name] || defaultD;
       this._editPaths[name] = this._parsePath(d);
     }
     this._dragging = null;
@@ -333,7 +431,14 @@ class SigenergyHouseCard extends LitElement {
   get _gridImport() { return this._toWatts(this._config.entities.grid_import); }
   get _gridExport() { return this._toWatts(this._config.entities.grid_export); }
   get _evPower() { return this._toWatts(this._config.entities.ev_charger_power); }
-  get _isNight() { return this._stateStr(this._config.entities.sun) === "below_horizon"; }
+  // Night selection: by default the sun position (original behaviour), or the
+  // Home Assistant theme's dark mode with dark_mode: "theme".
+  get _isNight() {
+    if ((this._config.dark_mode || "sun") === "theme" && this.hass && this.hass.themes) {
+      return !!this.hass.themes.darkMode;
+    }
+    return this._stateStr(this._config.entities.sun) === "below_horizon";
+  }
 
   get _batteryPower() {
     const raw = this._batteryPowerRaw;
@@ -628,33 +733,56 @@ class SigenergyHouseCard extends LitElement {
   }
 
   // ── Image URLs ───────────────────────────────────────────────────────────
-  get _baseImage() {
-    const base = this._config.image_path;
-    // Two-garage mode: pick the composite scene by which car(s) are shown.
-    // Two-garage mode: ALWAYS stay in the two-car garage scene and vary which bay holds a
-    // car by which EV is connected. This keeps the garage layout fixed, so the AC chargers
-    // and EV/EV2 cables (positioned for the two-bay garage) stay aligned in every state —
-    // rather than snapping back to the single-car scene when one EV disconnects.
-    //   EV1 = left bay, EV2 = right bay.
-    //   both → home_has_solar_has_2car.png   |  EV1 only → …_has_2carL.png (left car)
-    //   EV2 only → …_has_2carR.png (right car)  |  none → …_no_2car.png (empty two-car garage)
-    // (Day-only for now; night variants are a documented future addition.)
+  // Which composite base scene the current feature state needs. Single-garage:
+  // has_car/no_car. Two-garage mode always stays in the two-car scene and
+  // varies which bay holds a car (EV1 = left, EV2 = right), keeping the garage
+  // layout, AC chargers and EV cables aligned in every state.
+  get _baseScene() {
     if (this._twoEvGarage) {
       const s1 = this._showEvVehicle, s2 = this._showEv2Vehicle;
-      if (s1 && s2) return `${base}/home_has_solar_has_2car.png`;
-      if (s1) return `${base}/home_has_solar_has_2carL.png`;
-      if (s2) return `${base}/home_has_solar_has_2carR.png`;
-      return `${base}/home_has_solar_no_2car.png`;
+      if (s1 && s2) return "has_2car";
+      if (s1) return "has_2carL";
+      if (s2) return "has_2carR";
+      return "no_2car";
     }
-    if (this._showEvVehicle) {
-      return this._isNight ? `${base}/dark_home_has_solar_has_car.png` : `${base}/home_has_solar_has_car.png`;
-    }
-    // Gate closed, no car/charger (no dark variant available)
-    return `${base}/home_has_solar_no_car.png`;
+    return this._showEvVehicle ? "has_car" : "no_car";
   }
-  get _sigenstorImage() { return `${this._config.image_path}/sigenstor_home.png`; }
-  get _ammeterImage() { return `${this._config.image_path}/ammeter_home.png`; }
-  get _acChargerImage() { return `${this._config.image_path}/ac_charger_bg.png`; }
+
+  // Resolve a style image value: full URLs and absolute paths pass through,
+  // bare filenames are relative to the style's image_path.
+  _styleImageUrl(value) {
+    if (!value || /^(https?:)?\/\//.test(value) || value.startsWith("/")) return value;
+    return `${this._styleGet("image_path")}/${value}`;
+  }
+
+  get _baseImage() {
+    const scene = this._baseScene;
+    // A style may supply scene images directly (filenames relative to
+    // image_path, or full URLs), with a `_night` variant per scene.
+    const imgs = this._style.images || {};
+    const day = this._styleImageUrl(imgs[scene]);
+    const night = this._styleImageUrl(imgs[`${scene}_night`]);
+    if (day || night) {
+      return (this._isNight && night) || day || night;
+    }
+    const base = this._styleGet("image_path");
+    const file = BASE_SCENE_FILES[scene];
+    // Built-in scenes: upstream ships a dark variant only for has_car.
+    if (this._isNight && scene === "has_car") return `${base}/dark_${file}`;
+    return `${base}/${file}`;
+  }
+  // Overlay images: style may supply day/night pairs via the images map
+  // (keys sigenstor / sigenstor_night, ammeter / ammeter_night,
+  // ac_charger / ac_charger_night); night falls back to the day image.
+  _overlayImage(dayKey, nightKey, defaultFile) {
+    const imgs = this._style.images || {};
+    const day = this._styleImageUrl(imgs[dayKey]) || `${this._styleGet("image_path")}/${defaultFile}`;
+    const night = this._styleImageUrl(imgs[nightKey]);
+    return (this._isNight && night) || day;
+  }
+  get _sigenstorImage() { return this._overlayImage("sigenstor", "sigenstor_night", "sigenstor_home.png"); }
+  get _ammeterImage() { return this._overlayImage("ammeter", "ammeter_night", "ammeter_home.png"); }
+  get _acChargerImage() { return this._overlayImage("ac_charger", "ac_charger_night", "ac_charger_bg.png"); }
   get _heatPumpImage() {
     const style = this._config.hp_image_style || 'outdoor';
     if (style === 'split_ac') return `${this._config.image_path}/smart_load/air_conditioner_big.png`;
@@ -759,11 +887,11 @@ class SigenergyHouseCard extends LitElement {
   _renderSocRing() {
     const soc = this._batterySoc;
     const color = this._socRingColor(soc);
-    const cx = this._config.soc_ring_cx || 505;
-    const cy = this._config.soc_ring_cy || 615;
-    const r = this._config.soc_ring_r || 28;
-    const skewX = this._config.soc_ring_skew_x || 0;
-    const skewY = this._config.soc_ring_skew_y || 0;
+    const cx = this._styleGet("soc_ring_cx") || 505;
+    const cy = this._styleGet("soc_ring_cy") || 615;
+    const r = this._styleGet("soc_ring_r") || 28;
+    const skewX = this._styleGet("soc_ring_skew_x") || 0;
+    const skewY = this._styleGet("soc_ring_skew_y") || 0;
     const transform = (skewX || skewY)
       ? `translate(${cx},${cy}) skewX(${skewX}) skewY(${skewY}) translate(${-cx},${-cy})`
       : '';
@@ -929,8 +1057,8 @@ class SigenergyHouseCard extends LitElement {
     const rect = svgEl.getBoundingClientRect();
     if (!rect.width || !rect.height) return { x: 0, y: 0 };
     return {
-      x: (e.clientX - rect.left) / rect.width * VB_W,
-      y: (e.clientY - rect.top) / rect.height * VB_H,
+      x: (e.clientX - rect.left) / rect.width * this._vbW,
+      y: (e.clientY - rect.top) / rect.height * this._vbH,
     };
   }
 
@@ -1384,8 +1512,8 @@ class SigenergyHouseCard extends LitElement {
       next.w = Math.max(40, Math.round(original.w + dx));
       next.h = Math.max(40, Math.round(original.h + dy));
     } else {
-      next.x = Math.max(0, Math.min(VB_W - next.w, Math.round(original.x + dx)));
-      next.y = Math.max(0, Math.min(VB_H - next.h, Math.round(original.y + dy)));
+      next.x = Math.max(0, Math.min(this._vbW - next.w, Math.round(original.x + dx)));
+      next.y = Math.max(0, Math.min(this._vbH - next.h, Math.round(original.y + dy)));
     }
     this._config = {
       ...this._config,
@@ -1814,7 +1942,7 @@ class SigenergyHouseCard extends LitElement {
             @pointerdown="${this._isAssetEditMode ? (e) => this._onHpDragStart(e) : null}" />` : ''}
 
           <svg class="flow-svg ${_isModal || this._isZoneEditMode ? 'edit-active' : ''}"
-               viewBox="0 0 ${VB_W} ${VB_H}"
+               viewBox="0 0 ${this._vbW} ${this._vbH}"
                preserveAspectRatio="xMidYMid meet"
                style="${_isModal ? (this._activePath ? 'cursor: crosshair;' : 'cursor: grab;') : ''}"
                @click="${_isModal ? (e) => this._onSvgClick(e) : null}"
