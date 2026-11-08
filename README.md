@@ -564,6 +564,68 @@ For advanced users who want to customize cable routing on the house card:
 5. Copy the resulting path coordinates from the browser console as JSON
 6. Remove `edit_paths: true` when done
 
+### House Styles
+
+A **house style** bundles an image set with everything calibrated to it — cable paths, click
+zones, label positions, SoC ring placement and the SVG viewBox. Define styles under
+`house_styles`, select one with `house_style`, and the card swaps the whole look at once.
+Without `house_style`, the built-in scene is used exactly as before.
+
+Each style may set any of: `image_path`, `images`, `viewbox`, `paths`, `click_zones`,
+`label_positions`, `colors`, and `soc_ring_cx` / `soc_ring_cy` / `soc_ring_r` /
+`soc_ring_skew_x` / `soc_ring_skew_y`. Top-level YAML values (including editor output)
+still win over the style, so you can fine-tune one style's geometry from the editors
+without touching the rest.
+
+```yaml
+type: custom:sigenergy-house-card
+house_style: aus-house
+house_styles:
+  aus-house:
+    image_path: /local/genergy/aus-house
+    viewbox: [1170, 700]          # native dimensions of the style's images
+    images:
+      has_car: aus_house_day.png
+      has_car_night: aus_house_night.png
+      no_car: aus_house_day.png
+      no_car_night: aus_house_night.png
+    paths:
+      solar: "M 475 85 L 335 270"
+      # ... one polyline per cable, in viewBox coordinates
+    soc_ring_cx: 790
+    soc_ring_cy: 470
+```
+
+`images` keys are scene names: `has_car` / `no_car` (single garage), `has_2car` /
+`has_2carL` / `has_2carR` / `no_2car` (two-garage mode), plus the overlay slots
+`sigenstor`, `ammeter` and `ac_charger`. Any scene may add a `_night` variant
+(e.g. `no_car_night`); omitted variants fall back to the day image. Values can be
+filenames relative to `image_path` or full URLs.
+
+### Day/Night Selection
+
+By default the night image variant is chosen from the sun (`sun.sun` below the horizon).
+Set `dark_mode: "theme"` to follow the Home Assistant theme's light/dark mode instead —
+useful when the dashboard theme, not the sunset, should decide which image renders.
+
+```yaml
+dark_mode: "theme"
+```
+
+### Power Display Lock
+
+Set `power_kw_dp` to 1, 2 or 3 to lock all power readouts to kilowatts with
+that many decimal places instead of the automatic W → kW scaling:
+
+```yaml
+power_kw_dp: 2
+```
+
+A flow that displays as zero at that resolution — below 10^-dp kW (1dp:
+100 W, 2dp: 10 W, 3dp: 1 W) — counts as idle: the battery is neither charging
+nor discharging, the grid is neither importing nor exporting, and the cable
+comet animations stop. Leave the option out (or 0) for the legacy auto-scale.
+
 ### Visual Layers
 The house card composites multiple PNG layers:
 - **House**: `home_has_solar_has_car.png` (day) / `dark_home_has_solar_has_car.png` (night) — switches automatically
