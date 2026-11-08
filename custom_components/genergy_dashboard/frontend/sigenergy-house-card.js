@@ -97,6 +97,12 @@ const DEFAULT_CONFIG = {
   // What selects the night image variant: "sun" (sun.sun below_horizon) or
   // "theme" (follow the Home Assistant theme's dark mode).
   dark_mode: "sun",
+  // Lock power readouts to kilowatts with a fixed number of decimal places
+  // (1–3) instead of the W → kW auto-scale. A flow that displays as zero in
+  // that resolution — below 10^-dp kW (2dp: 10 W, 1dp: 100 W, 3dp: 1 W) —
+  // counts as idle: no charging, discharging, importing, exporting and no
+  // cable animation. 0 keeps the legacy auto-scale.
+  power_kw_dp: 0,
   soc_ring_cx: 498,
   soc_ring_cy: 585,
   soc_ring_r: 32,
@@ -225,6 +231,10 @@ const LABELS = {
   ac:      { top: "33%", left: "1%",   entity: "ev_charger_power",   label: "AC CHARGER",   color: "ev" },
   heatpump:{ top: "43%", left: "78%",  entity: "heat_pump_power",    label: "HEAT PUMP",    color: "heat_pump" },
 };
+
+// Idle flows (battery not charging/discharging, grid not importing/exporting)
+// render their value in this neutral grey instead of a directional colour.
+const IDLE_LABEL_COLOR = "#cdd6e4";
 
 // ─── Card Class ──────────────────────────────────────────────────────────────
 // Container width (px) at which heat-pump perspective values are interpreted
@@ -461,7 +471,23 @@ class SigenergyHouseCard extends LitElement {
     return 0;
   }
 
-  get _batteryDeadbandW() { return parseFloat(this._config.battery_deadband_w) || 0; }
+  // Flow idle threshold in watts: the value that displays as zero at the
+  // configured kW resolution (10^-dp kW; 2dp → 10 W, 1dp → 100 W, 3dp → 1 W).
+  // Sub-threshold noise is idle: it displays as 0 kW and drives no state
+  // change. Unlocked (dp 0), this is 0 and each flow keeps its legacy
+  // threshold below.
+  get _powerKwDp() {
+    const dp = parseInt(this._config.power_kw_dp, 10);
+    return dp >= 1 && dp <= 3 ? dp : 0;
+  }
+  get _flowIdleW() {
+    const dp = this._powerKwDp;
+    return dp ? 1000 / Math.pow(10, dp) : 0;
+  }
+  get _batteryDeadbandW() {
+    const db = parseFloat(this._config.battery_deadband_w) || 0;
+    return Math.max(db, this._flowIdleW);
+  }
   get _isCharging() { return this._batteryPower > this._batteryDeadbandW; }
   get _isDischarging() { return this._batteryPower < -this._batteryDeadbandW; }
 
@@ -556,10 +582,10 @@ class SigenergyHouseCard extends LitElement {
     const timeStr = h > 0 ? `${h}h ${m}m` : `${m}m`;
     return { timeStr, targetSoc, targetLabel, isCharging: pwr > 0 };
   }
-  get _isImporting() { return this._gridPower > 1; }
-  get _isExporting() { return this._gridPower < -1; }
-  get _isSolarActive() { return this._solarPower > 5; }
-  get _isEvCharging() { return this._evPower > 5; }
+  get _isImporting() { return this._gridPower > Math.max(1, this._flowIdleW); }
+  get _isExporting() { return this._gridPower < -Math.max(1, this._flowIdleW); }
+  get _isSolarActive() { return this._solarPower > Math.max(5, this._flowIdleW); }
+  get _isEvCharging() { return this._evPower > Math.max(5, this._flowIdleW); }
   get _isEvConsumingAboveThreshold() {
     const threshold = parseFloat(this._config.features.ev_vehicle_power_threshold);
     return this._evPower > (Number.isFinite(threshold) ? threshold : 100);
@@ -679,6 +705,14 @@ class SigenergyHouseCard extends LitElement {
         if (unit === "kWh") return abs >= 100 ? `${sign}${abs.toFixed(0)} kWh` : `${sign}${abs.toFixed(1)} kWh`;
         if (unit === "Wh") return abs >= 1000 ? `${sign}${(abs / 1000).toFixed(1)} kWh` : `${sign}${abs.toFixed(0)} Wh`;
         if (unit === "MWh") return `${sign}${(abs * 1000).toFixed(1)} kWh`;
+      }
+      // Locked mode: always kilowatts at the configured resolution. Below the
+      // resolution step (10^-dp kW) the value displays as 0 kW with no sign —
+      // the flow is idle (see _flowIdleW).
+      const kwDp = this._powerKwDp;
+      if (kwDp) {
+        const w = abs < this._flowIdleW ? 0 : abs;
+        return `${w > 0 && val < 0 ? '-' : ''}${(w / 1000).toFixed(kwDp)} kW`;
       }
       // Read user-configured auto-scale threshold (default 1000 W)
       let thresh = 1000;
@@ -1779,18 +1813,24 @@ class SigenergyHouseCard extends LitElement {
           statusLine = "Charging";
           if (rt) runtimeLine = `${rt.timeStr} to ${rt.targetSoc}%${rt.targetLabel || ''}`;
           color = this._config.swap_battery_colors ? this._config.colors.battery_discharge : this._config.colors.battery_charge;
+        } else {
+          color = IDLE_LABEL_COLOR;
         }
         break;
       }
       case "grid": {
         const gp = this._gridPower;
-        primary = this._formatPower(gp, this._config.entities.grid_active || this._config.entities.grid_import);
+        // Absolute value: direction is conveyed by the Importing/Exporting
+        // status and colour, so a signed number would only confuse.
+        primary = this._formatPower(Math.abs(gp), this._config.entities.grid_active || this._config.entities.grid_import);
         if (this._isImporting) {
           statusLine = "Importing";
           color = this._config.colors.grid_import;
         } else if (this._isExporting) {
           statusLine = "Exporting";
           color = this._config.colors.grid_export;
+        } else {
+          color = IDLE_LABEL_COLOR;
         }
         break;
       }
@@ -1819,7 +1859,7 @@ class SigenergyHouseCard extends LitElement {
         primary = `${ev2Name} · ${ev2Pwr}${socPart}`;
         secondary = "";
         if (ev2Range != null && !Number.isNaN(ev2Range)) runtimeLine = this._formatRange(this._config.entities.ev2_range, ev2Range);
-        if (this._ev2Power > 5 || (this._isEv2ConnectedByState && this._stateSaysCharging(this._ev2ConnectionState))) statusLine = "Charging";
+        if (this._ev2Power > Math.max(5, this._flowIdleW) || (this._isEv2ConnectedByState && this._stateSaysCharging(this._ev2ConnectionState))) statusLine = "Charging";
         else if (this._isEv2ConnectedByState) statusLine = "Connected";
         break;
       }
